@@ -70,6 +70,25 @@ handle_restore_logic() {
     done <<< "$user_selections"
 }
 
+# --- Blacklist Matching Helper ---
+# Returns 0 (true) if rel_path is blacklisted: exact match, path lives under
+# a blacklisted entry, or path is an ancestor of one. The ancestor case
+# matters for symlink deployment — if a subdirectory is blacklisted, its
+# parent must not be linked either, otherwise a partial sandbox would replace
+# real local files.
+is_blacklisted() {
+    local rel_path=$1
+    local blacklist=$2
+    [ -f "$blacklist" ] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line=$(echo "$line" | xargs)
+        line="${line%/}"   # normalize trailing slash (README example: .config/my-app/)
+        [[ -z "$line" || "$line" =~ ^# ]] && continue
+        [[ "$rel_path" == "$line" || "$rel_path" == "$line"/* || "$line" == "$rel_path"/* ]] && return 0
+    done < "$blacklist"
+    return 1
+}
+
 # --- RECURSIVE Blacklist-Aware Copy ---
 copy_with_blacklist() {
     local source=$1
@@ -83,6 +102,7 @@ copy_with_blacklist() {
     if [ -f "$blacklist" ]; then
         while IFS= read -r line || [[ -n "$line" ]]; do
             line=$(echo "$line" | xargs)
+            line="${line%/}"   # normalize trailing slash (README example: .config/my-app/)
             [[ -z "$line" || "$line" =~ ^# ]] && continue
             blacklisted+=("$line")
         done < "$blacklist"
@@ -102,9 +122,13 @@ copy_with_blacklist() {
             fi
         done
 
-        if [ "$skip" = true ] && [ -e "$target_path" ]; then
+        # Skip blacklisted entries unconditionally. The previous guard
+        # (`[ -e "$target_path" ]`) only preserved blacklisted paths that
+        # already existed in the sandbox, so a fresh deploy staged them
+        # anyway and they got symlinked over real files.
+        if [ "$skip" = true ]; then
             if [[ "$rel_path" == "$b" ]]; then
-                warn "  - Preserving blacklisted entry: $rel_path"
+                warn "  - Skipping blacklisted entry: $rel_path"
             fi
             continue
         fi
@@ -147,7 +171,7 @@ create_symlink() {
 
 # --- Deployment Orchestrator ---
 deploy_symlinks() {
-    local source_dir=$1; local backup_root=$2; local id=$3
+    local source_dir=$1; local backup_root=$2; local id=$3; local blacklist=$4
     local timestamp=$(date +%Y%m%d_%H%M%S)
     local backup_dir="$backup_root/backups/$id/$timestamp"
 
@@ -156,7 +180,14 @@ deploy_symlinks() {
         local name=$(basename "$item")
         [[ "$name" == "." || "$name" == ".." || "$name" == ".config" ]] && continue
         [ -e "$item" ] || continue
-        
+
+        # Never link blacklisted paths, even if they somehow exist in the
+        # sandbox (e.g. staged by an older version or an empty dir).
+        if is_blacklisted "$name" "$blacklist"; then
+            warn "  - Skipping blacklisted entry: $name"
+            continue
+        fi
+
         create_symlink "$item" "$HOME/$name" "$backup_dir"
     done
 
@@ -166,7 +197,12 @@ deploy_symlinks() {
             local name=$(basename "$item")
             [[ "$name" == "." || "$name" == ".." ]] && continue
             [ -e "$item" ] || continue
-            
+
+            if is_blacklisted ".config/$name" "$blacklist"; then
+                warn "  - Skipping blacklisted entry: .config/$name"
+                continue
+            fi
+
             create_symlink "$item" "$HOME/.config/$name" "$backup_dir"
         done
     fi
