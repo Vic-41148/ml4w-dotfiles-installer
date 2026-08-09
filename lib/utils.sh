@@ -256,14 +256,17 @@ run_setup_logic() {
     fi
     
     # 2. Dependencies
+    # NOTE: a missing dependency folder must NOT abort the rest of setup.
+    # Profiles like ML4W's repo don't ship setup/dependencies, and returning
+    # early here silently skipped step 4 (the user post.sh hook) — which is
+    # where Hyprland 0.56 compat fixes live. Warn and continue instead.
     if [ ! -d "$dep_dir" ]; then 
-        warn "Dependency folder not found at: $dep_dir"
-        return 1
+        warn "Dependency folder not found at: $dep_dir — skipping dependency install (post-install hooks will still run)."
+    else
+        [ -f "$dep_dir/packages" ] && process_package_file "$dep_dir/packages"
+        local distro_pkgs="$dep_dir/packages-$distro"
+        [ -f "$distro_pkgs" ] && process_package_file "$distro_pkgs"
     fi
-    
-    [ -f "$dep_dir/packages" ] && process_package_file "$dep_dir/packages"
-    local distro_pkgs="$dep_dir/packages-$distro"
-    [ -f "$distro_pkgs" ] && process_package_file "$distro_pkgs"
 
     # 3. Repo Post-installation
     local postflight="$repo_path/setup/post-$distro.sh"
