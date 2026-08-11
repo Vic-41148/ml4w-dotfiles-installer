@@ -36,7 +36,14 @@ handle_restore_logic() {
     info "Existing configuration found. Select items to keep (Restore):"
     info "Uncheck items to overwrite with default versions from the update."
     
-    local user_selections=$(echo "$restore_data" | gum choose --no-limit --height 25 --selected="$selected_default")
+    local user_selections
+    if [ "${ML4W_YES:-0}" = "1" ]; then
+        # Non-interactive: keep every item (default selection = all). Scripts
+        # (dot-switch) set ML4W_YES=1; gum can't be answered with typed 'y'.
+        user_selections="$restore_data"
+    else
+        user_selections=$(echo "$restore_data" | gum choose --no-limit --height 25 --selected="$selected_default")
+    fi
 
     if [ -z "$user_selections" ]; then
         warn "No items selected for restoration. Overwriting with all defaults."
@@ -361,7 +368,7 @@ read_dotinst() {
     echo -e "Description: $description" >&2
     echo -e "${GREEN}--------------------------------------------------${NC}" >&2
 
-    if ! gum confirm "Do you want to proceed with the installation?"; then info "Installation cancelled by user."; exit 0; fi
+    if [ "${ML4W_YES:-0}" != "1" ] && ! gum confirm "Do you want to proceed with the installation?"; then info "Installation cancelled by user."; exit 0; fi
 
     local working_dir=$(mktemp -d -t ml4w-dots-XXXXXX)
     if [ -d "$git_url" ]; then
@@ -371,7 +378,7 @@ read_dotinst() {
         info "Remote repository detected. Cloning source..."
         local clone_cmd="git clone --depth=1"
         [ -n "$tag" ] && [ "$tag" != "null" ] && clone_cmd="git clone --depth=1 --branch $tag"
-        if ! $clone_cmd "$git_url" "$working_dir" &> /dev/null; then 
+        if ! $clone_cmd "$git_url" "$working_dir"; then 
             error "Failed to clone repository."; rm -rf "$working_dir"; return 1
         fi
     fi
